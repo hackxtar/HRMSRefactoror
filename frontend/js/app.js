@@ -12,6 +12,7 @@ let state = {
     scanResults: null,
     history: [],
     deepSearchSuggestions: [],
+    deepSearchPreview: {},
 };
 
 // ============== Toast Notifications ==============
@@ -832,9 +833,13 @@ async function runDeepSearch() {
         });
 
         state.deepSearchSuggestions = data.suggestions || [];
+        state.deepSearchPreview = {};
         renderDeepSearchSuggestions();
         document.getElementById('deep-search-panel').classList.remove('hidden');
-        showToast(`Generated ${data.total} suggestions`, 'success');
+        showToast(`Generated ${data.total} suggestions. Scanning for matches...`, 'success');
+
+        // Auto-trigger preview scan to get file counts
+        await previewDeepSearchMatches();
     } catch (err) {
         showToast('Deep Search failed: ' + err.message, 'error');
     }
@@ -859,21 +864,173 @@ function renderDeepSearchSuggestions() {
                     <span class="text-[10px] font-bold text-amber-600 uppercase tracking-wider">${escHtml(category)}</span>
                     <span class="text-[10px] text-amber-500">(${items.length})</span>
                 </div>
-                ${items.map(s => `
-                    <label class="flex items-center gap-3 px-3 py-1.5 hover:bg-white/60 rounded-lg cursor-pointer transition-colors">
-                        <input type="checkbox" class="deep-search-cb rounded border-amber-300 text-amber-600" data-idx="${s.idx}" ${s.selected ? 'checked' : ''} onchange="toggleSuggestion(${s.idx}, this.checked)">
-                        <code class="text-xs text-red-600 bg-red-50/80 px-1.5 py-0.5 rounded font-mono">${escHtml(s.original)}</code>
-                        <span class="text-xs text-slate-400">→</span>
-                        <code class="text-xs text-emerald-600 bg-emerald-50/80 px-1.5 py-0.5 rounded font-mono">${escHtml(s.replacement)}</code>
-                        ${s.source_rule ? `<span class="text-[10px] text-slate-400 ml-auto">from: ${escHtml(s.source_rule)}</span>` : ''}
-                    </label>
-                `).join('')}
+                ${items.map(s => {
+            const preview = state.deepSearchPreview[s.original];
+            const fileCount = preview ? preview.file_count : null;
+            const totalMatches = preview ? preview.total_matches : 0;
+            let countBadge = '';
+            if (fileCount === null) {
+                countBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-400 animate-pulse">scanning...</span>';
+            } else if (fileCount === 0) {
+                countBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-400">0 files</span>';
+            } else {
+                countBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700 cursor-pointer hover:bg-blue-200 transition-colors" onclick="event.preventDefault(); event.stopPropagation(); showDeepSearchFiles('${escHtml(s.original).replace(/'/g, "\\'")}')"
+                            title="Click to see matched files">${fileCount} file${fileCount > 1 ? 's' : ''} (${totalMatches} match${totalMatches > 1 ? 'es' : ''})</span>`;
+            }
+            return `
+                        <label class="flex items-center gap-3 px-3 py-1.5 hover:bg-white/60 rounded-lg cursor-pointer transition-colors">
+                            <input type="checkbox" class="deep-search-cb rounded border-amber-300 text-amber-600" data-idx="${s.idx}" ${s.selected ? 'checked' : ''} onchange="toggleSuggestion(${s.idx}, this.checked)">
+                            <code class="text-xs text-red-600 bg-red-50/80 px-1.5 py-0.5 rounded font-mono">${escHtml(s.original)}</code>
+                            <span class="text-xs text-slate-400">→</span>
+                            <code class="text-xs text-emerald-600 bg-emerald-50/80 px-1.5 py-0.5 rounded font-mono">${escHtml(s.replacement)}</code>
+                            ${countBadge}
+                            ${s.source_rule ? `<span class="text-[10px] text-slate-400 ml-auto">from: ${escHtml(s.source_rule)}</span>` : ''}
+                        </label>
+                    `;
+        }).join('')}
             </div>
         `;
     }
 
     container.innerHTML = html;
     updateDeepSearchCount();
+}
+
+async function previewDeepSearchMatches() {
+    const projectIds = [...document.querySelectorAll('.exec-proj-cb:checked')].map(cb => parseInt(cb.value));
+    if (!projectIds.length) {
+        showToast('Select projects to preview matches', 'warning');
+        return;
+    }
+
+    const patterns = state.deepSearchSuggestions.map(s => ({
+        search_pattern: s.original,
+        replacement_text: s.replacement,
+        case_sensitive: false
+    }));
+
+    // Deduplicate patterns
+    const seen = new Set();
+    const uniquePatterns = patterns.filter(p => {
+        if (seen.has(p.search_pattern)) return false;
+        seen.add(p.search_pattern);
+        return true;
+    });
+
+    try {
+        const data = await api('/api/deep-search/preview', {
+            method: 'POST',
+            body: { patterns: uniquePatterns, project_ids: projectIds }
+        });
+
+        state.deepSearchPreview = {};
+        for (const result of (data.results || [])) {
+            state.deepSearchPreview[result.original] = result;
+        }
+
+        renderDeepSearchSuggestions();
+
+        const totalFiles = Object.values(state.deepSearchPreview).reduce((s, r) => s + r.file_count, 0);
+        const totalMatches = Object.values(state.deepSearchPreview).reduce((s, r) => s + r.total_matches, 0);
+        showToast(`Preview complete: ${totalFiles} files, ${totalMatches} matches across all variants`, 'success');
+    } catch (err) {
+        showToast('Preview scan failed: ' + err.message, 'error');
+        // Clear scanning state so badges show as failed instead of stuck
+        state.deepSearchSuggestions.forEach(s => {
+            if (!state.deepSearchPreview[s.original]) {
+                state.deepSearchPreview[s.original] = { original: s.original, replacement: s.replacement, file_count: 0, total_matches: 0, files: [] };
+            }
+        });
+        renderDeepSearchSuggestions();
+    }
+}
+
+function showDeepSearchFiles(pattern) {
+    const preview = state.deepSearchPreview[pattern];
+    if (!preview || !preview.files || !preview.files.length) {
+        showToast('No files found for this pattern', 'info');
+        return;
+    }
+
+    // Store current pattern context for lazy diff loading
+    state._currentDsPattern = preview;
+
+    document.getElementById('ds-modal-title').innerHTML = `
+        <code class="text-red-600 bg-red-50 px-1.5 py-0.5 rounded font-mono text-sm">${escHtml(preview.original)}</code>
+        <span class="text-slate-400 mx-1">→</span>
+        <code class="text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded font-mono text-sm">${escHtml(preview.replacement)}</code>
+    `;
+    document.getElementById('ds-modal-subtitle').textContent = `${preview.file_count} file${preview.file_count > 1 ? 's' : ''} · ${preview.total_matches} total match${preview.total_matches > 1 ? 'es' : ''}`;
+
+    document.getElementById('ds-modal-content').innerHTML = `
+        <div class="space-y-2">
+            ${preview.files.map((f, i) => `
+                <div class="border border-slate-200 rounded-xl overflow-hidden">
+                    <div class="flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors">
+                        <div class="min-w-0 flex-1">
+                            <p class="text-sm font-medium text-slate-700 font-mono truncate">${escHtml(f.relative_path)}</p>
+                            <p class="text-[10px] text-slate-400 truncate">${escHtml(f.file_path)}</p>
+                        </div>
+                        <div class="flex items-center gap-2 ml-3 shrink-0">
+                            <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">${f.match_count} match${f.match_count > 1 ? 'es' : ''}</span>
+                            <button onclick="toggleDsModalDiff(this, ${i})" class="text-xs px-3 py-1 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors font-medium">Show Diff</button>
+                        </div>
+                    </div>
+                    <div id="ds-diff-${i}" class="hidden border-t border-slate-100">
+                        <div class="p-3 max-h-60 overflow-auto text-xs font-mono bg-slate-900 text-slate-100">
+                            <p class="text-slate-400 italic">Click "Show Diff" to load...</p>
+                        </div>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+
+    openModal('ds-files-modal');
+}
+
+async function toggleDsModalDiff(btn, idx) {
+    const diffEl = document.getElementById(`ds-diff-${idx}`);
+    if (!diffEl) return;
+
+    if (!diffEl.classList.contains('hidden')) {
+        // Already open — collapse it
+        diffEl.classList.add('hidden');
+        btn.textContent = 'Show Diff';
+        return;
+    }
+
+    // Show the diff container
+    diffEl.classList.remove('hidden');
+    const contentDiv = diffEl.querySelector('div');
+
+    // Load from API if not cached
+    if (!diffEl.dataset.loaded) {
+        btn.textContent = 'Loading...';
+        btn.disabled = true;
+
+        try {
+            const pattern = state._currentDsPattern;
+            const file = pattern.files[idx];
+            const data = await api('/api/deep-search/diff', {
+                method: 'POST',
+                body: {
+                    file_path: file.file_path,
+                    search_pattern: pattern.original,
+                    replacement_text: pattern.replacement,
+                    case_sensitive: false
+                }
+            });
+            contentDiv.innerHTML = data.diff_html || '<p class="text-slate-400">No differences found</p>';
+            diffEl.dataset.loaded = 'true';
+        } catch (err) {
+            contentDiv.innerHTML = `<p class="text-red-400">Failed to load diff: ${escHtml(err.message)}</p>`;
+        }
+
+        btn.disabled = false;
+    }
+
+    btn.textContent = 'Hide Diff';
 }
 
 function toggleSuggestion(idx, checked) {

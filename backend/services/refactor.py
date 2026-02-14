@@ -9,7 +9,7 @@ import hashlib
 import re
 from typing import List, Tuple, Optional
 from datetime import datetime
-from .scanner import FileScanner
+from .scanner import FileScanner, _normalize_ext_set
 
 
 class RefactorExecutor:
@@ -110,10 +110,10 @@ class RefactorExecutor:
             _, file_ext = os.path.splitext(file_path)
 
             for rule in rules:
-                # Check if this rule applies to this file type
+                # Check if this rule applies to this file type (normalized)
                 target_exts = rule.get('target_extensions')
                 if target_exts:
-                    allowed_exts = {e.strip().lower() for e in target_exts.split(',')}
+                    allowed_exts = _normalize_ext_set(target_exts)
                     if file_ext.lower() not in allowed_exts:
                         continue
 

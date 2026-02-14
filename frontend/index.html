@@ -575,6 +575,29 @@
         </div>
     </div>
 
+    <!-- Deep Search Files Modal -->
+    <div id="ds-files-modal"
+        class="fixed inset-0 bg-black/50 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col animate-slideUp">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+                <div>
+                    <h3 class="text-lg font-semibold text-slate-800" id="ds-modal-title">File Matches</h3>
+                    <p class="text-xs text-slate-500 mt-0.5" id="ds-modal-subtitle"></p>
+                </div>
+                <button onclick="closeModal('ds-files-modal')"
+                    class="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-6" id="ds-modal-content">
+                <p class="text-sm text-slate-400 italic">No files to display</p>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div id="toast-container" class="fixed top-4 right-4 z-50 space-y-2"></div>
 

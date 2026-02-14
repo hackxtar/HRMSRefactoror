@@ -295,6 +295,46 @@ class CustomScanRequest(BaseModel):
     project_ids: Optional[List[int]] = None
 
 
+class DeepSearchPreviewFile(BaseModel):
+    """A file found during deep search preview."""
+    file_path: str
+    relative_path: str
+    match_count: int
+
+
+class DeepSearchPatternResult(BaseModel):
+    """Result for a single pattern during preview."""
+    original: str
+    replacement: str
+    file_count: int
+    total_matches: int
+    files: List[DeepSearchPreviewFile] = []
+
+
+class DeepSearchPreviewRequest(BaseModel):
+    """Request for deep search preview scan."""
+    patterns: List[CustomScanRule]
+    project_ids: Optional[List[int]] = None
+
+
+class DeepSearchPreviewResponse(BaseModel):
+    """Response from deep search preview."""
+    results: List[DeepSearchPatternResult]
+
+
+class DeepSearchDiffRequest(BaseModel):
+    """Request for on-demand diff generation."""
+    file_path: str
+    search_pattern: str
+    replacement_text: str
+    case_sensitive: bool = False
+
+
+class DeepSearchDiffResponse(BaseModel):
+    """Response with generated diff HTML."""
+    diff_html: str
+
+
 # ============== Rollback Schemas ==============
 
 class RollbackResponse(BaseModel):

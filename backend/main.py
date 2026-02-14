@@ -13,6 +13,7 @@ from typing import List, Optional
 from datetime import datetime
 import json
 import os
+import re
 
 from .database import get_db, init_db, engine, Base
 from . import models, schemas
@@ -452,6 +453,141 @@ def custom_scan(request: schemas.CustomScanRequest, db: Session = Depends(get_db
             yield json.dumps({"type": "error", "message": str(e)}) + "\n"
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+@app.post("/api/deep-search/preview", response_model=schemas.DeepSearchPreviewResponse)
+def deep_search_preview(request: schemas.DeepSearchPreviewRequest, db: Session = Depends(get_db)):
+    """
+    Scan project files and return per-pattern file counts with diffs.
+    Reads each file once and checks all patterns for efficiency.
+    """
+    if not request.patterns:
+        return {"results": []}
+
+    config = db.query(models.ScanConfig).first()
+    if not config:
+        config = models.ScanConfig()
+
+    if request.project_ids:
+        projects = db.query(models.Project).filter(
+            models.Project.id.in_(request.project_ids),
+            models.Project.is_active == True
+        ).all()
+    else:
+        projects = db.query(models.Project).filter(models.Project.is_active == True).all()
+
+    if not projects:
+        return {"results": []}
+
+    scanner = FileScanner(
+        include_extensions=config.include_extensions,
+        exclude_extensions=config.exclude_extensions,
+        exclude_folders=config.exclude_folders
+    )
+
+    # Initialize results per unique pattern
+    results = {}
+    unique_patterns = []
+    seen_keys = set()
+    for p in request.patterns:
+        key = p.search_pattern
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique_patterns.append(p)
+            results[key] = {
+                "original": p.search_pattern,
+                "replacement": p.replacement_text,
+                "file_count": 0,
+                "total_matches": 0,
+                "files": []
+            }
+
+    # Pre-compute lowered patterns for case-insensitive searches
+    pattern_lower_map = {}
+    for p in unique_patterns:
+        if not p.case_sensitive:
+            pattern_lower_map[p.search_pattern] = p.search_pattern.lower()
+
+    # Collect all files from projects (deduplicating across roots)
+    root_paths = [p.root_path for p in projects]
+    valid_paths = [p for p in root_paths if os.path.isdir(p)]
+
+    all_files = []
+    seen_files = set()
+    for root_path in valid_paths:
+        for file_path in scanner.scan_directory(root_path):
+            if file_path not in seen_files:
+                seen_files.add(file_path)
+                all_files.append((root_path, file_path))
+
+    # Scan each file once — fast str.count() only, NO diff generation
+    for root_path, file_path in all_files:
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except Exception:
+            continue
+
+        # Lowercase content ONCE for all case-insensitive patterns
+        content_lower = None
+
+        for p in unique_patterns:
+            key = p.search_pattern
+
+            # Fast counting via str.count() — no regex, no diff
+            if p.case_sensitive:
+                count = content.count(key)
+            else:
+                if content_lower is None:
+                    content_lower = content.lower()
+                count = content_lower.count(pattern_lower_map[key])
+
+            if count > 0:
+                rel_path = os.path.relpath(file_path, root_path)
+                results[key]["file_count"] += 1
+                results[key]["total_matches"] += count
+                results[key]["files"].append({
+                    "file_path": file_path,
+                    "relative_path": rel_path,
+                    "match_count": count,
+                })
+
+
+    return {"results": list(results.values())}
+
+
+@app.post("/api/deep-search/diff", response_model=schemas.DeepSearchDiffResponse)
+def deep_search_diff(request: schemas.DeepSearchDiffRequest, db: Session = Depends(get_db)):
+    """
+    Generate diff HTML for a single file + pattern on demand.
+    Called lazily when user clicks 'Show Diff' in the modal.
+    """
+    config = db.query(models.ScanConfig).first()
+    if not config:
+        config = models.ScanConfig()
+
+    scanner = FileScanner(
+        include_extensions=config.include_extensions,
+        exclude_extensions=config.exclude_extensions,
+        exclude_folders=config.exclude_folders
+    )
+
+    try:
+        with open(request.file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"File not found: {e}")
+
+    modified, _ = scanner.apply_replacement(
+        content,
+        request.search_pattern,
+        request.replacement_text,
+        is_regex=False,
+        case_sensitive=request.case_sensitive
+    )
+
+    diff_html = scanner.generate_diff_html(content, modified, request.file_path)
+    return {"diff_html": diff_html}
 
 
 # ============== Execute Endpoint ==============
