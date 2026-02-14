@@ -6,7 +6,7 @@ keyword tracking, Git integration, and dashboard statistics.
 
 from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sqla_func
 from typing import List, Optional
@@ -298,11 +298,11 @@ def import_rules(data: schemas.RuleBulkExport, db: Session = Depends(get_db)):
 
 # ============== Dry Run / Scan Endpoint ==============
 
-@app.post("/api/scan", response_model=schemas.DryRunResponse)
+@app.post("/api/scan")
 def dry_run_scan(request: schemas.DryRunRequest, db: Session = Depends(get_db)):
     """
-    Perform a dry run scan.
-    Finds all matches and returns diffs without modifying any files.
+    Perform a dry run scan (Streaming Response).
+    Finds all matches and streams progress + results.
     """
     # Get scan config
     config = db.query(models.ScanConfig).first()
@@ -349,39 +349,18 @@ def dry_run_scan(request: schemas.DryRunRequest, db: Session = Depends(get_db)):
         for r in rules
     ]
 
-    # Scan and get results
     root_paths = [p.root_path for p in projects]
-    errors = []
-
-    # Validate paths exist
-    for path in root_paths:
-        if not os.path.isdir(path):
-            errors.append(f"Path does not exist: {path}")
-
     valid_paths = [p for p in root_paths if os.path.isdir(p)]
 
-    if not valid_paths:
-        return schemas.DryRunResponse(
-            total_files_scanned=0,
-            total_matches=0,
-            files=[],
-            errors=errors
-        )
+    # Generator for streaming response
+    def event_generator():
+        try:
+            for item in scan_files_with_rules(valid_paths, rule_dicts, scanner):
+                yield json.dumps(item) + "\n"
+        except Exception as e:
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
 
-    # Count total files scanned
-    total_scanned = 0
-    for path in valid_paths:
-        total_scanned += len(scanner.scan_directory(path))
-
-    # Get file diffs
-    file_results = scan_files_with_rules(valid_paths, rule_dicts, scanner)
-
-    return schemas.DryRunResponse(
-        total_files_scanned=total_scanned,
-        total_matches=sum(f['match_count'] for f in file_results),
-        files=[schemas.FileDiff(**f) for f in file_results],
-        errors=errors
-    )
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
 # ============== Execute Endpoint ==============
@@ -765,6 +744,25 @@ def auto_merge(db: Session = Depends(get_db)):
         successful_pulls=successful_pulls,
         total_replacements=total_replacements,
     )
+
+
+# ============== Utilities ==============
+
+@app.get("/api/utils/browse")
+def browse_folder():
+    """Open a native folder browser dialog."""
+    import tkinter as tk
+    from tkinter import filedialog
+    
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        folder_path = filedialog.askdirectory()
+        root.destroy()
+        return {"path": folder_path}
+    except Exception as e:
+        return {"path": "", "error": str(e)}
 
 
 # ============== Static Files & Frontend ==============

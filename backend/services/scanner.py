@@ -260,71 +260,90 @@ def scan_files_with_rules(
     root_paths: List[str],
     rules: List[dict],
     scanner: FileScanner
-) -> List[dict]:
+):
     """
     Scan multiple directories with multiple rules.
-    Returns a list of file diffs.
+    Yields progress and match results.
     """
-    results = []
-    seen_files = set()
-
+    files_to_scan = []
+    
+    # First, collect all files to scan
     for root_path in root_paths:
         if not os.path.isdir(root_path):
             continue
-
         files = scanner.scan_directory(root_path)
+        files_to_scan.extend([(f, root_path) for f in files])
 
-        for file_path in files:
-            if file_path in seen_files:
-                continue
-            seen_files.add(file_path)
+    total_files = len(files_to_scan)
+    seen_files = set()
+    
+    for idx, (file_path, root_path) in enumerate(files_to_scan):
+        if file_path in seen_files:
+            continue
+        seen_files.add(file_path)
 
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    original_content = f.read()
-            except Exception:
-                continue
+        # Yield progress
+        yield {
+            'type': 'progress',
+            'scanned': idx + 1,
+            'total': total_files,
+            'current_file': os.path.basename(file_path),
+            'full_path': file_path
+        }
 
-            # Apply all rules to get final content
-            modified_content = original_content
-            total_matches = 0
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                original_content = f.read()
+        except Exception:
+            continue
 
-            for rule in rules:
-                # Check if this rule applies to this file type
-                target_exts = rule.get('target_extensions')
-                if target_exts:
-                    _, file_ext = os.path.splitext(file_path)
-                    allowed_exts = {e.strip().lower() for e in target_exts.split(',')}
-                    if file_ext.lower() not in allowed_exts:
-                        continue
+        # Apply all rules to get final content
+        modified_content = original_content
+        match_count = 0
+        matches_found = False
 
-                modified_content, count = scanner.apply_replacement(
-                    modified_content,
-                    rule['search_pattern'],
-                    rule['replacement_text'],
-                    rule.get('is_regex', False),
-                    rule.get('case_sensitive', True)
-                )
-                total_matches += count
+        for rule in rules:
+            # Check if this rule applies to this file type
+            target_exts = rule.get('target_extensions')
+            if target_exts:
+                _, file_ext = os.path.splitext(file_path)
+                allowed_exts = {e.strip().lower() for e in target_exts.split(',')}
+                if file_ext.lower() not in allowed_exts:
+                    continue
 
-            if total_matches > 0:
-                diff_html = scanner.generate_diff_html(
-                    original_content, modified_content, file_path
-                )
+            # We use a temporary content to check for matches without modifying the 'modified_content' yet
+            # Actually, to show cumulative diffs, we should modify 'modified_content'
+            new_content, count = scanner.apply_replacement(
+                modified_content,
+                rule['search_pattern'],
+                rule['replacement_text'],
+                rule.get('is_regex', False),
+                rule.get('case_sensitive', True)
+            )
+            
+            if count > 0:
+                modified_content = new_content
+                match_count += count
+                matches_found = True
 
-                # Calculate relative path
-                relative_path = file_path
-                for root in root_paths:
-                    if file_path.startswith(root):
-                        relative_path = os.path.relpath(file_path, root)
-                        break
+        if matches_found:
+            diff_html = scanner.generate_diff_html(
+                original_content, modified_content, file_path
+            )
 
-                results.append({
-                    'file_path': file_path,
-                    'relative_path': relative_path,
-                    'match_count': total_matches,
-                    'diff_html': diff_html,
-                    'selected': True
-                })
+            relative_path = os.path.relpath(file_path, root_path)
+            
+            # Identify project name or root (simplification)
+            project_root = root_path
 
-    return results
+            yield {
+                'type': 'match',
+                'file_path': file_path,
+                'relative_path': relative_path,
+                'project_root': project_root,
+                'match_count': match_count,
+                'diff_html': diff_html,
+                'selected': True,
+                'extension': os.path.splitext(file_path)[1].lower()
+            }
+

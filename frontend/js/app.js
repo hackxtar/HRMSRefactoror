@@ -178,6 +178,19 @@ function openProjectModal(project = null) {
     openModal('project-modal');
 }
 
+async function browseFolder() {
+    try {
+        const result = await api('/api/utils/browse');
+        if (result.path) {
+            document.getElementById('project-path').value = result.path;
+        } else if (result.error) {
+            showToast('Browse error: ' + result.error, 'error');
+        }
+    } catch (err) {
+        showToast('Browse failed: ' + err.message, 'error');
+    }
+}
+
 function editProject(id) {
     const project = state.projects.find(p => p.id === id);
     if (project) openProjectModal(project);
@@ -456,6 +469,9 @@ async function loadExecuteOptions() {
     }
 }
 
+// Global variable to store raw scan results for filtering/sorting
+let rawScanMatches = [];
+
 async function runDryScan() {
     const ruleIds = [...document.querySelectorAll('.exec-rule-cb:checked')].map(cb => parseInt(cb.value));
     const projectIds = [...document.querySelectorAll('.exec-proj-cb:checked')].map(cb => parseInt(cb.value));
@@ -463,65 +479,251 @@ async function runDryScan() {
     if (!ruleIds.length) { showToast('Select at least one rule', 'warning'); return; }
     if (!projectIds.length) { showToast('Select at least one project', 'warning'); return; }
 
-    document.getElementById('scan-status').textContent = 'Scanning...';
-    document.getElementById('scan-results').innerHTML = '';
+    const statusEl = document.getElementById('scan-status');
+    const resultsContainer = document.getElementById('scan-results');
+    statusEl.textContent = 'Initializing scan...';
+    resultsContainer.innerHTML = '';
     document.getElementById('execute-actions').classList.add('hidden');
 
+    // Reset state
+    rawScanMatches = [];
+    state.scanResults = { files: [] };
+    state._selectedRuleIds = ruleIds;
+
     try {
-        const result = await api('/api/scan', {
+        const response = await fetch(`${API}/api/scan`, {
             method: 'POST',
-            body: { rule_ids: ruleIds, project_ids: projectIds }
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rule_ids: ruleIds, project_ids: projectIds })
         });
 
-        state.scanResults = result;
-        state._selectedRuleIds = ruleIds;
+        if (!response.ok) throw new Error(response.statusText);
 
-        document.getElementById('scan-status').textContent = `Scanned ${result.total_files_scanned} files — ${result.total_matches} matches in ${result.files.length} files`;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let totalScanned = 0;
+        let totalFiles = 0;
 
-        if (result.errors.length) {
-            showToast(`${result.errors.length} scan error(s)`, 'warning');
+        // Process stream
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // Keep incomplete line in buffer
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const event = JSON.parse(line);
+
+                    if (event.type === 'progress') {
+                        totalScanned = event.scanned;
+                        totalFiles = event.total;
+                        statusEl.innerHTML = `
+                            <span class="inline-flex items-center gap-2">
+                                <svg class="animate-spin h-4 w-4 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Scanning: ${event.current_file} (${Math.round((event.scanned / event.total) * 100)}%)
+                            </span>
+                        `;
+                    } else if (event.type === 'match') {
+                        rawScanMatches.push(event);
+                        // Add to state for execution
+                        state.scanResults.files.push(event);
+                        // Render immediately (or debounced for performance if needed)
+                        renderScanResultsWithOptions();
+                    } else if (event.type === 'error') {
+                        showToast('Scan error: ' + event.message, 'error');
+                    }
+                } catch (e) {
+                    console.error('Error parsing stream line:', line, e);
+                }
+            }
         }
 
-        renderScanResults(result);
-        if (result.files.length > 0) {
+        statusEl.textContent = `Completed: Scanned ${totalScanned} files. Found matches in ${rawScanMatches.length} files.`;
+        if (rawScanMatches.length > 0) {
             document.getElementById('execute-actions').classList.remove('hidden');
+            renderScanResultsWithOptions(); // Final render
+        } else {
+            resultsContainer.innerHTML = '<p class="text-slate-500 italic p-4">No matches found.</p>';
         }
+
     } catch (err) {
-        document.getElementById('scan-status').textContent = 'Scan failed';
+        statusEl.textContent = 'Scan failed';
         showToast('Scan failed: ' + err.message, 'error');
     }
 }
 
-function renderScanResults(result) {
+// Store current view options
+let scanViewOptions = {
+    sortBy: 'path', // 'path', 'project', 'matches'
+    groupBy: 'none' // 'none', 'project', 'extension'
+};
+
+function renderScanResultsWithOptions() {
     const container = document.getElementById('scan-results');
-    container.innerHTML = result.files.map((f, i) => `
-        <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
-            <div class="flex items-center gap-3 px-4 py-3 bg-slate-50 border-b border-slate-200">
-                <input type="checkbox" class="scan-file-cb rounded border-slate-300 text-blue-600" data-idx="${i}" ${f.selected ? 'checked' : ''}>
-                <div class="min-w-0 flex-1">
-                    <p class="text-sm font-medium text-slate-700 truncate font-mono">${f.relative_path}</p>
-                </div>
-                <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">${f.match_count} matches</span>
-                <button onclick="this.closest('.bg-white').querySelector('.diff-panel').classList.toggle('hidden')" class="text-xs text-blue-600 hover:text-blue-800 font-medium">Toggle Diff</button>
+
+    // Header with controls (only add if not existing)
+    if (!document.getElementById('scan-controls')) {
+        const controls = document.createElement('div');
+        controls.id = 'scan-controls';
+        controls.className = 'flex flex-wrap items-center gap-4 mb-4 bg-slate-50 p-3 rounded-lg border border-slate-200';
+        controls.innerHTML = `
+            <div class="flex items-center gap-2">
+                <span class="text-xs font-semibold text-slate-500 uppercase">Sort by:</span>
+                <select onchange="updateScanView('sortBy', this.value)" class="text-xs border-slate-300 rounded focus:ring-blue-500">
+                    <option value="path" ${scanViewOptions.sortBy === 'path' ? 'selected' : ''}>File Path</option>
+                    <option value="project" ${scanViewOptions.sortBy === 'project' ? 'selected' : ''}>Project</option>
+                    <option value="matches" ${scanViewOptions.sortBy === 'matches' ? 'selected' : ''}>Match Count</option>
+                </select>
             </div>
-            <div class="diff-panel hidden p-3 max-h-60 overflow-auto text-xs font-mono bg-slate-900 text-slate-100">
-                ${f.diff_html}
+            <div class="flex items-center gap-2">
+                <span class="text-xs font-semibold text-slate-500 uppercase">Group by:</span>
+                <select onchange="updateScanView('groupBy', this.value)" class="text-xs border-slate-300 rounded focus:ring-blue-500">
+                    <option value="none" ${scanViewOptions.groupBy === 'none' ? 'selected' : ''}>None</option>
+                    <option value="project" ${scanViewOptions.groupBy === 'project' ? 'selected' : ''}>Project</option>
+                    <option value="extension" ${scanViewOptions.groupBy === 'extension' ? 'selected' : ''}>File Type</option>
+                </select>
+            </div>
+            <div class="ml-auto text-xs text-slate-400 font-mono">
+                ${rawScanMatches.length} files matched
+            </div>
+        `;
+        // Insert controls before the results list container, but we need a wrapper if we want to clear list only
+        // Since resultsContainer is cleared, we should structure this differently.
+        // Let's prepend controls to the container if we are re-rendering full list
+    }
+
+    // Sorting
+    let displayFiles = [...rawScanMatches];
+    displayFiles.sort((a, b) => {
+        if (scanViewOptions.sortBy === 'project') return a.project_root.localeCompare(b.project_root);
+        if (scanViewOptions.sortBy === 'matches') return b.match_count - a.match_count;
+        return a.relative_path.localeCompare(b.relative_path);
+    });
+
+    // Grouping
+    let html = `
+        <div id="scan-controls-wrapper" class="sticky top-0 z-10 bg-white pb-2 border-b border-white">
+            <div class="flex flex-wrap items-center gap-4 mb-2 bg-slate-50 p-2 rounded-lg border border-slate-200">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-semibold text-slate-500 uppercase">Sort:</span>
+                    <select onchange="updateScanView('sortBy', this.value)" class="text-xs py-1 border-slate-300 rounded focus:ring-blue-500">
+                        <option value="path" ${scanViewOptions.sortBy === 'path' ? 'selected' : ''}>Path</option>
+                        <option value="project" ${scanViewOptions.sortBy === 'project' ? 'selected' : ''}>Project</option>
+                        <option value="matches" ${scanViewOptions.sortBy === 'matches' ? 'selected' : ''}>Most Matches</option>
+                    </select>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-semibold text-slate-500 uppercase">Group:</span>
+                    <select onchange="updateScanView('groupBy', this.value)" class="text-xs py-1 border-slate-300 rounded focus:ring-blue-500">
+                        <option value="none" ${scanViewOptions.groupBy === 'none' ? 'selected' : ''}>None</option>
+                        <option value="project" ${scanViewOptions.groupBy === 'project' ? 'selected' : ''}>Project</option>
+                        <option value="extension" ${scanViewOptions.groupBy === 'extension' ? 'selected' : ''}>Type</option>
+                    </select>
+                </div>
             </div>
         </div>
-    `).join('');
+        <div class="space-y-4 pt-2">
+    `;
+
+    if (scanViewOptions.groupBy === 'none') {
+        html += displayFiles.map((f, i) => renderFileCard(f, i)).join('');
+    } else {
+        const groups = {};
+        displayFiles.forEach(f => {
+            let key = scanViewOptions.groupBy === 'project' ? f.project_root : f.extension;
+            if (!key) key = 'Unknown';
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(f);
+        });
+
+        // Sort groups keys
+        Object.keys(groups).sort().forEach(groupKey => {
+            const files = groups[groupKey];
+            const label = scanViewOptions.groupBy === 'project' ?
+                (state.projects.find(p => p.root_path === groupKey)?.name || truncatePath(groupKey)) :
+                (groupKey.toUpperCase() || 'NO EXT');
+
+            html += `
+                <div class="border border-slate-200 rounded-xl overflow-hidden mb-4">
+                    <div class="bg-slate-100 px-4 py-2 font-semibold text-sm text-slate-700 flex justify-between">
+                        <span>${label}</span>
+                        <span class="bg-white px-2 py-0.5 rounded-full text-xs border border-slate-200">${files.length}</span>
+                    </div>
+                    <div class="divide-y divide-slate-100">
+                        ${files.map((f, i) => renderFileCard(f, i, true)).join('')}
+                    </div>
+                </div>
+            `;
+        });
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function updateScanView(key, value) {
+    scanViewOptions[key] = value;
+    renderScanResultsWithOptions();
+}
+
+function renderFileCard(f, i, compact = false) {
+    // We need to find the correct index in rawScanMatches to ensure checkbox works for global state selection
+    // But for simplicity in this implementation, we map based on file_path since indexes might shift with sorting
+    // Actually, `state.scanResults.files` must match `rawScanMatches` exactly/reference same objects for simplicity.
+    const realIndex = rawScanMatches.findIndex(x => x.file_path === f.file_path);
+
+    return `
+        <div class="bg-white ${compact ? '' : 'rounded-xl border border-slate-200'} overflow-hidden">
+            <div class="flex items-center gap-3 px-4 py-3 ${compact ? 'hover:bg-slate-50' : 'bg-slate-50 border-b border-slate-200'}">
+                <input type="checkbox" class="scan-file-cb rounded border-slate-300 text-blue-600" data-idx="${realIndex}" ${f.selected ? 'checked' : ''} onchange="toggleFileSelection(${realIndex}, this.checked)">
+                <div class="min-w-0 flex-1">
+                    <p class="text-sm font-medium text-slate-700 truncate font-mono">${f.relative_path}</p>
+                    ${!compact ? `<p class="text-[10px] text-slate-400 truncate">${f.project_root}</p>` : ''}
+                </div>
+                <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 whitespace-nowrap">${f.match_count} matches</span>
+                <button onclick="toggleDiffPanel(this)" class="text-xs text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap ml-2">Show Diff</button>
+            </div>
+            <div class="diff-panel hidden p-0 border-t border-slate-100">
+                <div class="p-3 max-h-60 overflow-auto text-xs font-mono bg-slate-900 text-slate-100">
+                   ${f.diff_html}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function toggleDiffPanel(btn) {
+    const panels = btn.closest('.bg-white').querySelectorAll('.diff-panel');
+    panels.forEach(p => p.classList.toggle('hidden'));
+    btn.textContent = btn.textContent === 'Show Diff' ? 'Hide Diff' : 'Show Diff';
+}
+
+function toggleFileSelection(idx, isChecked) {
+    if (rawScanMatches[idx]) {
+        rawScanMatches[idx].selected = isChecked;
+    }
 }
 
 function selectAllFiles() {
+    rawScanMatches.forEach(f => f.selected = true);
     document.querySelectorAll('.scan-file-cb').forEach(cb => cb.checked = true);
 }
 function deselectAllFiles() {
+    rawScanMatches.forEach(f => f.selected = false);
     document.querySelectorAll('.scan-file-cb').forEach(cb => cb.checked = false);
 }
 
 async function executeRefactor() {
-    if (!state.scanResults) return;
-    const checkedIdxs = [...document.querySelectorAll('.scan-file-cb:checked')].map(cb => parseInt(cb.dataset.idx));
-    const filePaths = checkedIdxs.map(i => state.scanResults.files[i].file_path);
+    if (!rawScanMatches.length) return;
+    const filePaths = rawScanMatches.filter(f => f.selected).map(f => f.file_path);
 
     if (!filePaths.length) { showToast('No files selected', 'warning'); return; }
     if (!confirm(`Apply changes to ${filePaths.length} file(s)? Backups will be created.`)) return;
