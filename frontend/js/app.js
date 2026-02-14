@@ -11,6 +11,7 @@ let state = {
     rules: [],
     scanResults: null,
     history: [],
+    deepSearchSuggestions: [],
 };
 
 // ============== Toast Notifications ==============
@@ -315,34 +316,88 @@ async function loadRules() {
 }
 
 function renderRules() {
-    document.getElementById('rule-list').innerHTML = state.rules.map(r => `
-        <div class="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md transition-all ${!r.is_active ? 'opacity-50' : ''}">
-            <div class="flex items-start justify-between">
-                <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2">
-                        <h4 class="text-sm font-semibold text-slate-800">${r.name}</h4>
-                        ${r.is_regex ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-violet-100 text-violet-700">Regex</span>' : ''}
-                        ${!r.case_sensitive ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700">Case-insensitive</span>' : ''}
-                    </div>
-                    <div class="flex items-center gap-2 mt-1.5">
-                        <code class="text-xs text-red-600 bg-red-50 px-1.5 py-0.5 rounded">${escHtml(r.search_pattern)}</code>
-                        <span class="text-xs text-slate-400">→</span>
-                        <code class="text-xs text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">${escHtml(r.replacement_text)}</code>
-                    </div>
-                    ${r.description ? `<p class="text-xs text-slate-500 mt-1">${r.description}</p>` : ''}
-                    ${r.target_extensions ? `<p class="text-[10px] text-slate-400 mt-0.5">Files: ${r.target_extensions}</p>` : ''}
-                </div>
-                <div class="flex items-center gap-1 ml-2">
-                    <button onclick="editRule(${r.id})" title="Edit" class="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                    </button>
-                    <button onclick="deleteRule(${r.id})" title="Delete" class="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                    </button>
-                </div>
-            </div>
-        </div>
-    `).join('') || '<p class="text-sm text-slate-400">No rules defined yet</p>';
+    const el = document.getElementById('rule-list');
+    if (!state.rules.length) {
+        el.innerHTML = '<p class="text-sm text-slate-400 p-4">No rules defined yet. Use Quick Add above to create one.</p>';
+        return;
+    }
+    el.innerHTML = `
+        <table class="w-full text-left">
+            <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
+                <tr>
+                    <th class="px-4 py-3 font-semibold">Keyword</th>
+                    <th class="px-4 py-3 font-semibold">Replacement</th>
+                    <th class="px-4 py-3 font-semibold hidden sm:table-cell">Extensions</th>
+                    <th class="px-4 py-3 font-semibold hidden md:table-cell">Flags</th>
+                    <th class="px-4 py-3 font-semibold text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                ${state.rules.map(r => `
+                    <tr class="hover:bg-slate-50 transition-colors ${!r.is_active ? 'opacity-40' : ''}">
+                        <td class="px-4 py-3">
+                            <code class="text-sm text-red-600 bg-red-50 px-1.5 py-0.5 rounded font-mono">${escHtml(r.search_pattern)}</code>
+                            ${r.description ? `<p class="text-[10px] text-slate-400 mt-0.5 truncate max-w-[180px]">${escHtml(r.description)}</p>` : ''}
+                        </td>
+                        <td class="px-4 py-3">
+                            <code class="text-sm text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded font-mono">${escHtml(r.replacement_text)}</code>
+                        </td>
+                        <td class="px-4 py-3 hidden sm:table-cell">
+                            <span class="text-xs text-slate-500 font-mono">${r.target_extensions || 'All'}</span>
+                        </td>
+                        <td class="px-4 py-3 hidden md:table-cell">
+                            <div class="flex items-center gap-1">
+                                ${r.is_regex ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-violet-100 text-violet-700">Regex</span>' : ''}
+                                ${!r.case_sensitive ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700">Ci</span>' : ''}
+                                ${r.is_active ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-emerald-100 text-emerald-700">Active</span>' : '<span class="px-1.5 py-0.5 text-[10px] rounded bg-slate-200 text-slate-500">Off</span>'}
+                            </div>
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="flex items-center justify-end gap-1">
+                                <button onclick="editRule(${r.id})" title="Edit" class="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-blue-600">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                                </button>
+                                <button onclick="deleteRule(${r.id})" title="Delete" class="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+async function quickAddRule() {
+    const keyword = document.getElementById('quick-keyword').value.trim();
+    const replacement = document.getElementById('quick-replacement').value.trim();
+    const extensions = document.getElementById('quick-extensions').value.trim();
+
+    if (!keyword) { showToast('Keyword is required', 'warning'); return; }
+    if (!replacement) { showToast('Replacement is required', 'warning'); return; }
+
+    try {
+        await api('/api/rules', {
+            method: 'POST',
+            body: {
+                name: `${keyword} → ${replacement}`,
+                search_pattern: keyword,
+                replacement_text: replacement,
+                target_extensions: extensions || null,
+                is_regex: false,
+                case_sensitive: false,
+                is_active: true,
+            }
+        });
+        showToast(`Rule added: ${keyword} → ${replacement}`, 'success');
+        document.getElementById('quick-keyword').value = '';
+        document.getElementById('quick-replacement').value = '';
+        document.getElementById('quick-extensions').value = '';
+        loadRules();
+    } catch (err) {
+        showToast('Failed to add rule: ' + err.message, 'error');
+    }
 }
 
 function openRuleModal(rule = null) {
@@ -485,6 +540,13 @@ async function runDryScan() {
     resultsContainer.innerHTML = '';
     document.getElementById('execute-actions').classList.add('hidden');
 
+    // Show & reset stats bar
+    const statsBar = document.getElementById('scan-stats-bar');
+    statsBar.classList.remove('hidden');
+    document.getElementById('stat-files-scanned').textContent = '0';
+    document.getElementById('stat-files-matched').textContent = '0';
+    document.getElementById('stat-total-matches').textContent = '0';
+
     // Reset state
     rawScanMatches = [];
     state.scanResults = { files: [] };
@@ -522,6 +584,8 @@ async function runDryScan() {
                     if (event.type === 'progress') {
                         totalScanned = event.scanned;
                         totalFiles = event.total;
+                        // Update stats bar live
+                        document.getElementById('stat-files-scanned').textContent = totalScanned;
                         statusEl.innerHTML = `
                             <span class="inline-flex items-center gap-2">
                                 <svg class="animate-spin h-4 w-4 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -533,9 +597,11 @@ async function runDryScan() {
                         `;
                     } else if (event.type === 'match') {
                         rawScanMatches.push(event);
-                        // Add to state for execution
                         state.scanResults.files.push(event);
-                        // Render immediately (or debounced for performance if needed)
+                        // Update stats bar live
+                        document.getElementById('stat-files-matched').textContent = rawScanMatches.length;
+                        const totalMatchCount = rawScanMatches.reduce((sum, m) => sum + (m.match_count || 0), 0);
+                        document.getElementById('stat-total-matches').textContent = totalMatchCount;
                         renderScanResultsWithOptions();
                     } else if (event.type === 'error') {
                         showToast('Scan error: ' + event.message, 'error');
@@ -545,6 +611,12 @@ async function runDryScan() {
                 }
             }
         }
+
+        // Final stats update
+        document.getElementById('stat-files-scanned').textContent = totalScanned;
+        document.getElementById('stat-files-matched').textContent = rawScanMatches.length;
+        const totalMatchCount = rawScanMatches.reduce((sum, m) => sum + (m.match_count || 0), 0);
+        document.getElementById('stat-total-matches').textContent = totalMatchCount;
 
         statusEl.textContent = `Completed: Scanned ${totalScanned} files. Found matches in ${rawScanMatches.length} files.`;
         if (rawScanMatches.length > 0) {
@@ -744,6 +816,184 @@ async function executeRefactor() {
         `;
     } catch (err) {
         showToast('Execution failed: ' + err.message, 'error');
+    }
+}
+// ============== Deep Search ==============
+
+async function runDeepSearch() {
+    const ruleIds = [...document.querySelectorAll('.exec-rule-cb:checked')].map(cb => parseInt(cb.value));
+    if (!ruleIds.length) { showToast('Select at least one rule for Deep Search', 'warning'); return; }
+
+    try {
+        showToast('Generating naming variants...', 'info');
+        const data = await api('/api/deep-search', {
+            method: 'POST',
+            body: { rule_ids: ruleIds }
+        });
+
+        state.deepSearchSuggestions = data.suggestions || [];
+        renderDeepSearchSuggestions();
+        document.getElementById('deep-search-panel').classList.remove('hidden');
+        showToast(`Generated ${data.total} suggestions`, 'success');
+    } catch (err) {
+        showToast('Deep Search failed: ' + err.message, 'error');
+    }
+}
+
+function renderDeepSearchSuggestions() {
+    const container = document.getElementById('deep-search-suggestions');
+    const suggestions = state.deepSearchSuggestions;
+
+    // Group by category
+    const groups = {};
+    suggestions.forEach((s, i) => {
+        if (!groups[s.category]) groups[s.category] = [];
+        groups[s.category].push({ ...s, idx: i });
+    });
+
+    let html = '';
+    for (const [category, items] of Object.entries(groups)) {
+        html += `
+            <div class="mb-2">
+                <div class="flex items-center gap-2 px-2 py-1">
+                    <span class="text-[10px] font-bold text-amber-600 uppercase tracking-wider">${escHtml(category)}</span>
+                    <span class="text-[10px] text-amber-500">(${items.length})</span>
+                </div>
+                ${items.map(s => `
+                    <label class="flex items-center gap-3 px-3 py-1.5 hover:bg-white/60 rounded-lg cursor-pointer transition-colors">
+                        <input type="checkbox" class="deep-search-cb rounded border-amber-300 text-amber-600" data-idx="${s.idx}" ${s.selected ? 'checked' : ''} onchange="toggleSuggestion(${s.idx}, this.checked)">
+                        <code class="text-xs text-red-600 bg-red-50/80 px-1.5 py-0.5 rounded font-mono">${escHtml(s.original)}</code>
+                        <span class="text-xs text-slate-400">→</span>
+                        <code class="text-xs text-emerald-600 bg-emerald-50/80 px-1.5 py-0.5 rounded font-mono">${escHtml(s.replacement)}</code>
+                        ${s.source_rule ? `<span class="text-[10px] text-slate-400 ml-auto">from: ${escHtml(s.source_rule)}</span>` : ''}
+                    </label>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    container.innerHTML = html;
+    updateDeepSearchCount();
+}
+
+function toggleSuggestion(idx, checked) {
+    if (state.deepSearchSuggestions[idx]) {
+        state.deepSearchSuggestions[idx].selected = checked;
+    }
+    updateDeepSearchCount();
+}
+
+function toggleAllSuggestions(val) {
+    state.deepSearchSuggestions.forEach(s => s.selected = val);
+    document.querySelectorAll('.deep-search-cb').forEach(cb => cb.checked = val);
+    updateDeepSearchCount();
+}
+
+function updateDeepSearchCount() {
+    const selected = state.deepSearchSuggestions.filter(s => s.selected).length;
+    const total = state.deepSearchSuggestions.length;
+    document.getElementById('deep-search-count').textContent = `${selected} of ${total} selected`;
+}
+
+async function startDeepSearchScan() {
+    const selected = state.deepSearchSuggestions.filter(s => s.selected);
+    if (!selected.length) { showToast('No suggestions selected', 'warning'); return; }
+
+    const projectIds = [...document.querySelectorAll('.exec-proj-cb:checked')].map(cb => parseInt(cb.value));
+    if (!projectIds.length) { showToast('Select at least one project', 'warning'); return; }
+
+    const statusEl = document.getElementById('scan-status');
+    const resultsContainer = document.getElementById('scan-results');
+    statusEl.textContent = 'Running Deep Search scan...';
+    resultsContainer.innerHTML = '';
+    document.getElementById('execute-actions').classList.add('hidden');
+
+    // Show & reset stats bar
+    const statsBar = document.getElementById('scan-stats-bar');
+    statsBar.classList.remove('hidden');
+    document.getElementById('stat-files-scanned').textContent = '0';
+    document.getElementById('stat-files-matched').textContent = '0';
+    document.getElementById('stat-total-matches').textContent = '0';
+
+    rawScanMatches = [];
+    state.scanResults = { files: [] };
+    state._selectedRuleIds = []; // No DB rule IDs for custom scan
+
+    const rules = selected.map(s => ({
+        search_pattern: s.original,
+        replacement_text: s.replacement,
+        case_sensitive: false
+    }));
+
+    try {
+        const response = await fetch(`${API}/api/scan/custom`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rules, project_ids: projectIds })
+        });
+
+        if (!response.ok) throw new Error(response.statusText);
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let totalScanned = 0;
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const event = JSON.parse(line);
+                    if (event.type === 'progress') {
+                        totalScanned = event.scanned;
+                        document.getElementById('stat-files-scanned').textContent = totalScanned;
+                        statusEl.innerHTML = `
+                            <span class="inline-flex items-center gap-2">
+                                <svg class="animate-spin h-4 w-4 text-amber-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Deep Search: ${event.current_file} (${Math.round((event.scanned / event.total) * 100)}%)
+                            </span>
+                        `;
+                    } else if (event.type === 'match') {
+                        rawScanMatches.push(event);
+                        state.scanResults.files.push(event);
+                        document.getElementById('stat-files-matched').textContent = rawScanMatches.length;
+                        const totalMatchCount = rawScanMatches.reduce((sum, m) => sum + (m.match_count || 0), 0);
+                        document.getElementById('stat-total-matches').textContent = totalMatchCount;
+                        renderScanResultsWithOptions();
+                    } else if (event.type === 'error') {
+                        showToast('Scan error: ' + event.message, 'error');
+                    }
+                } catch (e) {
+                    console.error('Error parsing stream line:', line, e);
+                }
+            }
+        }
+
+        document.getElementById('stat-files-scanned').textContent = totalScanned;
+        document.getElementById('stat-files-matched').textContent = rawScanMatches.length;
+        const totalMatchCount = rawScanMatches.reduce((sum, m) => sum + (m.match_count || 0), 0);
+        document.getElementById('stat-total-matches').textContent = totalMatchCount;
+
+        statusEl.textContent = `Deep Search complete: Scanned ${totalScanned} files. Found matches in ${rawScanMatches.length} files.`;
+        if (rawScanMatches.length > 0) {
+            document.getElementById('execute-actions').classList.remove('hidden');
+            renderScanResultsWithOptions();
+        } else {
+            resultsContainer.innerHTML = '<p class="text-slate-500 italic p-4">No matches found for the selected variants.</p>';
+        }
+    } catch (err) {
+        statusEl.textContent = 'Deep Search scan failed';
+        showToast('Deep Search scan failed: ' + err.message, 'error');
     }
 }
 

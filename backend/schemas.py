@@ -258,6 +258,43 @@ class AutoMergeResponse(BaseModel):
     total_replacements: int
 
 
+# ============== Deep Search Schemas ==============
+
+class DeepSearchRequest(BaseModel):
+    """Request for Deep Search variant generation."""
+    rule_ids: List[int]
+
+
+class DeepSearchSuggestion(BaseModel):
+    """A single Deep Search suggestion."""
+    original: str
+    suggestion: str
+    replacement: str
+    category: str
+    selected: bool = True
+    source_rule: str = ""
+    source_rule_id: Optional[int] = None
+
+
+class DeepSearchResponse(BaseModel):
+    """Response from Deep Search."""
+    total: int
+    suggestions: List[DeepSearchSuggestion]
+
+
+class CustomScanRule(BaseModel):
+    """An inline rule for custom scan."""
+    search_pattern: str
+    replacement_text: str
+    case_sensitive: bool = False
+
+
+class CustomScanRequest(BaseModel):
+    """Request to scan with ad-hoc rules."""
+    rules: List[CustomScanRule]
+    project_ids: Optional[List[int]] = None
+
+
 # ============== Rollback Schemas ==============
 
 class RollbackResponse(BaseModel):

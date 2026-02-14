@@ -19,6 +19,7 @@ from . import models, schemas
 from .services.scanner import FileScanner, scan_files_with_rules
 from .services.refactor import RefactorExecutor, restore_from_backup
 from .services import git_service
+from .services.deep_search import generate_from_rules
 
 # Create tables on startup
 Base.metadata.create_all(bind=engine)
@@ -353,6 +354,96 @@ def dry_run_scan(request: schemas.DryRunRequest, db: Session = Depends(get_db)):
     valid_paths = [p for p in root_paths if os.path.isdir(p)]
 
     # Generator for streaming response
+    def event_generator():
+        try:
+            for item in scan_files_with_rules(valid_paths, rule_dicts, scanner):
+                yield json.dumps(item) + "\n"
+        except Exception as e:
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+# ============== Deep Search Endpoints ==============
+
+@app.post("/api/deep-search", response_model=schemas.DeepSearchResponse)
+def deep_search(request: schemas.DeepSearchRequest, db: Session = Depends(get_db)):
+    """
+    Generate naming-convention variant suggestions from existing rules.
+    Takes rule IDs and returns all possible code-pattern variations.
+    """
+    rules = db.query(models.ReplacementRule).filter(
+        models.ReplacementRule.id.in_(request.rule_ids)
+    ).all()
+
+    if not rules:
+        raise HTTPException(status_code=400, detail="No rules found with the provided IDs")
+
+    rule_dicts = [
+        {
+            "id": r.id,
+            "name": r.name,
+            "search_pattern": r.search_pattern,
+            "replacement_text": r.replacement_text,
+        }
+        for r in rules
+    ]
+
+    suggestions = generate_from_rules(rule_dicts)
+
+    return schemas.DeepSearchResponse(
+        total=len(suggestions),
+        suggestions=[schemas.DeepSearchSuggestion(**s) for s in suggestions]
+    )
+
+
+@app.post("/api/scan/custom")
+def custom_scan(request: schemas.CustomScanRequest, db: Session = Depends(get_db)):
+    """
+    Scan with ad-hoc inline rules (from Deep Search selections).
+    Streams progress and match results like /api/scan.
+    """
+    if not request.rules:
+        raise HTTPException(status_code=400, detail="No rules provided")
+
+    # Get scan config
+    config = db.query(models.ScanConfig).first()
+    if not config:
+        config = models.ScanConfig()
+
+    # Get project paths
+    if request.project_ids:
+        projects = db.query(models.Project).filter(
+            models.Project.id.in_(request.project_ids),
+            models.Project.is_active == True
+        ).all()
+    else:
+        projects = db.query(models.Project).filter(models.Project.is_active == True).all()
+
+    if not projects:
+        raise HTTPException(status_code=400, detail="No active projects configured")
+
+    scanner = FileScanner(
+        include_extensions=config.include_extensions,
+        exclude_extensions=config.exclude_extensions,
+        exclude_folders=config.exclude_folders
+    )
+
+    # Convert inline rules to dicts
+    rule_dicts = [
+        {
+            'search_pattern': r.search_pattern,
+            'replacement_text': r.replacement_text,
+            'is_regex': False,
+            'case_sensitive': r.case_sensitive,
+            'target_extensions': None
+        }
+        for r in request.rules
+    ]
+
+    root_paths = [p.root_path for p in projects]
+    valid_paths = [p for p in root_paths if os.path.isdir(p)]
+
     def event_generator():
         try:
             for item in scan_files_with_rules(valid_paths, rule_dicts, scanner):
