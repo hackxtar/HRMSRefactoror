@@ -17,7 +17,7 @@ import re
 
 from .database import get_db, init_db, engine, Base
 from . import models, schemas
-from .services.scanner import FileScanner, scan_files_with_rules
+from .services.scanner import FileScanner, scan_files_with_rules, detect_encoding
 from .services.refactor import RefactorExecutor, restore_from_backup
 from .services import git_service
 from .services.deep_search import generate_from_rules
@@ -523,7 +523,8 @@ def deep_search_preview(request: schemas.DeepSearchPreviewRequest, db: Session =
     # Scan each file once — fast str.count() only, NO diff generation
     for root_path, file_path in all_files:
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            encoding = detect_encoding(file_path)
+            with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
                 content = f.read()
         except Exception:
             continue
@@ -822,6 +823,45 @@ def rollback_execution(execution_id: int, db: Session = Depends(get_db)):
         files_failed=files_failed,
         errors=errors
     )
+
+
+# ============== ALTER SQL Endpoint ==============
+
+@app.post("/api/sql/alter", response_model=schemas.AlterSqlResponse)
+def generate_alter_sql_endpoint(request: schemas.AlterSqlRequest):
+    """Generate ALTER SQL script for a .sql file based on its object type."""
+    from backend.services.sql_alter import detect_sql_type, generate_alter_sql
+    from backend.services.scanner import detect_encoding
+
+    file_path = request.file_path
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+    if not file_path.lower().endswith('.sql'):
+        raise HTTPException(status_code=400, detail="Only .sql files are supported")
+
+    try:
+        encoding = detect_encoding(file_path)
+        with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
+            content = f.read()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
+
+    # Detect SQL type if not provided
+    sql_type = request.sql_type
+    if not sql_type or sql_type == 'UNKNOWN':
+        sql_type = detect_sql_type(content, file_path)
+
+    result = generate_alter_sql(
+        content=content,
+        sql_type=sql_type,
+        search_pattern=request.search_pattern,
+        replacement_text=request.replacement_text,
+        file_path=file_path,
+    )
+
+    return schemas.AlterSqlResponse(**result)
 
 
 # ============== Git Endpoints ==============

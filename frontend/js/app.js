@@ -753,6 +753,13 @@ function renderFileCard(f, i, compact = false) {
     // Actually, `state.scanResults.files` must match `rawScanMatches` exactly/reference same objects for simplicity.
     const realIndex = rawScanMatches.findIndex(x => x.file_path === f.file_path);
 
+    // Show Alter SQL button only for .sql files
+    const isSql = f.extension === '.sql';
+    const sqlTypeBadge = isSql && f.sql_type && f.sql_type !== 'UNKNOWN' ?
+        `<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-600 font-medium">${f.sql_type.replace('_', ' ')}</span>` : '';
+    const alterBtn = isSql ?
+        `<button onclick="showAlterSql('${escHtml(f.file_path.replace(/\\/g, '\\\\').replace(/'/g, "\\'"))}', '${f.sql_type || ''}')" class="text-xs px-2.5 py-1 bg-violet-50 text-violet-700 rounded-lg hover:bg-violet-100 font-medium whitespace-nowrap transition-colors">⚡ Alter SQL</button>` : '';
+
     return `
         <div class="bg-white ${compact ? '' : 'rounded-xl border border-slate-200'} overflow-hidden">
             <div class="flex items-center gap-3 px-4 py-3 ${compact ? 'hover:bg-slate-50' : 'bg-slate-50 border-b border-slate-200'}">
@@ -761,8 +768,10 @@ function renderFileCard(f, i, compact = false) {
                     <p class="text-sm font-medium text-slate-700 truncate font-mono">${f.relative_path}</p>
                     ${!compact ? `<p class="text-[10px] text-slate-400 truncate">${f.project_root}</p>` : ''}
                 </div>
+                ${sqlTypeBadge}
                 <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 whitespace-nowrap">${f.match_count} matches</span>
                 <button onclick="toggleDiffPanel(this)" class="text-xs text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap ml-2">Show Diff</button>
+                ${alterBtn}
             </div>
             <div class="diff-panel hidden p-0 border-t border-slate-100">
                 <div class="p-3 max-h-60 overflow-auto text-xs font-mono bg-slate-900 text-slate-100">
@@ -777,6 +786,97 @@ function toggleDiffPanel(btn) {
     const panels = btn.closest('.bg-white').querySelectorAll('.diff-panel');
     panels.forEach(p => p.classList.toggle('hidden'));
     btn.textContent = btn.textContent === 'Show Diff' ? 'Hide Diff' : 'Show Diff';
+}
+
+// ============== ALTER SQL ==============
+
+async function showAlterSql(filePath, sqlType) {
+    // Get the first active rule's search/replace for this request
+    const selectedRuleIds = state._selectedRuleIds || [];
+    const activeRule = state.rules.find(r => selectedRuleIds.includes(r.id));
+
+    if (!activeRule) {
+        showToast('No active rule found to generate ALTER SQL', 'warning');
+        return;
+    }
+
+    // Open modal immediately with loading state
+    const modal = document.getElementById('alter-sql-modal');
+    const contentEl = document.getElementById('alter-sql-content');
+    const typeEl = document.getElementById('alter-sql-type-badge');
+    const warningsEl = document.getElementById('alter-sql-warnings');
+    const copyBtn = document.getElementById('alter-sql-copy-btn');
+
+    modal.classList.remove('hidden');
+    contentEl.textContent = 'Generating ALTER SQL...';
+    contentEl.classList.add('animate-pulse');
+    typeEl.textContent = sqlType || 'Detecting...';
+    warningsEl.innerHTML = '';
+    copyBtn.disabled = true;
+
+    try {
+        const data = await api('/api/sql/alter', {
+            method: 'POST',
+            body: {
+                file_path: filePath,
+                search_pattern: activeRule.search_pattern,
+                replacement_text: activeRule.replacement_text,
+                sql_type: sqlType || null,
+            }
+        });
+
+        contentEl.classList.remove('animate-pulse');
+        contentEl.textContent = data.alter_sql;
+        typeEl.textContent = data.sql_type.replace('_', ' ');
+        copyBtn.disabled = false;
+
+        // Color the badge based on type
+        typeEl.className = 'text-xs font-bold px-3 py-1 rounded-full ';
+        switch (data.sql_type) {
+            case 'TABLE': typeEl.className += 'bg-blue-100 text-blue-700'; break;
+            case 'TABLE_TYPE': typeEl.className += 'bg-cyan-100 text-cyan-700'; break;
+            case 'VIEW': typeEl.className += 'bg-emerald-100 text-emerald-700'; break;
+            case 'STORED_PROCEDURE': typeEl.className += 'bg-amber-100 text-amber-700'; break;
+            case 'FUNCTION': typeEl.className += 'bg-purple-100 text-purple-700'; break;
+            default: typeEl.className += 'bg-slate-100 text-slate-600';
+        }
+
+        // Show warnings
+        if (data.warnings && data.warnings.length) {
+            warningsEl.innerHTML = data.warnings.map(w =>
+                `<div class="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    <span class="shrink-0 mt-0.5">⚠️</span>
+                    <span>${escHtml(w)}</span>
+                </div>`
+            ).join('');
+        }
+    } catch (err) {
+        contentEl.classList.remove('animate-pulse');
+        contentEl.textContent = 'Error: ' + err.message;
+        contentEl.classList.add('text-red-400');
+    }
+}
+
+function closeAlterSqlModal() {
+    document.getElementById('alter-sql-modal').classList.add('hidden');
+    const contentEl = document.getElementById('alter-sql-content');
+    contentEl.classList.remove('text-red-400');
+}
+
+function copyAlterSql() {
+    const content = document.getElementById('alter-sql-content').textContent;
+    navigator.clipboard.writeText(content).then(() => {
+        showToast('ALTER SQL copied to clipboard!', 'success');
+    }).catch(() => {
+        // Fallback for older browsers
+        const textarea = document.createElement('textarea');
+        textarea.value = content;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        showToast('ALTER SQL copied to clipboard!', 'success');
+    });
 }
 
 function toggleFileSelection(idx, isChecked) {

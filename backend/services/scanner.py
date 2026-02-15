@@ -36,6 +36,31 @@ def _normalize_ext_set(ext_string: str) -> Set[str]:
     return result
 
 
+def detect_encoding(file_path: str) -> str:
+    """
+    Detect file encoding by reading the BOM (Byte Order Mark).
+    Returns the encoding string suitable for open().
+
+    Supports:
+      - UTF-16 LE (BOM: FF FE)
+      - UTF-16 BE (BOM: FE FF)
+      - UTF-8 with BOM (BOM: EF BB BF)
+      - Falls back to UTF-8 for files without BOM
+    """
+    try:
+        with open(file_path, 'rb') as f:
+            raw = f.read(4)
+        if raw[:2] == b'\xff\xfe':
+            return 'utf-16-le'
+        if raw[:2] == b'\xfe\xff':
+            return 'utf-16-be'
+        if raw[:3] == b'\xef\xbb\xbf':
+            return 'utf-8-sig'
+    except Exception:
+        pass
+    return 'utf-8'
+
+
 class FileScanner:
     """
     Scans directories for files matching patterns and generates diffs.
@@ -341,7 +366,8 @@ def scan_files_with_rules(
         }
 
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            encoding = detect_encoding(file_path)
+            with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
                 original_content = f.read()
         except Exception:
             continue
@@ -386,6 +412,12 @@ def scan_files_with_rules(
             # Identify project name or root (simplification)
             project_root = root_path
 
+            # Detect SQL object type for .sql files
+            sql_type = None
+            if file_ext_lower == '.sql':
+                from .sql_alter import detect_sql_type
+                sql_type = detect_sql_type(original_content, file_path)
+
             yield {
                 'type': 'match',
                 'file_path': file_path,
@@ -394,5 +426,6 @@ def scan_files_with_rules(
                 'match_count': match_count,
                 'diff_html': diff_html,
                 'selected': True,
-                'extension': file_ext_lower
+                'extension': file_ext_lower,
+                'sql_type': sql_type,
             }

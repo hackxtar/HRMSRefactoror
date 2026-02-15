@@ -342,3 +342,21 @@ class RollbackResponse(BaseModel):
     files_restored: int
     files_failed: int
     errors: List[str] = []
+
+
+# ============== ALTER SQL Schemas ==============
+
+class AlterSqlRequest(BaseModel):
+    """Request to generate ALTER SQL for a .sql file."""
+    file_path: str
+    search_pattern: str
+    replacement_text: str
+    sql_type: Optional[str] = None  # Auto-detect if not provided
+
+
+class AlterSqlResponse(BaseModel):
+    """Response with generated ALTER SQL script."""
+    sql_type: str
+    alter_sql: str
+    warnings: List[str] = []
+

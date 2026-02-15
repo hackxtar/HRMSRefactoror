@@ -598,6 +598,40 @@
         </div>
     </div>
 
+    <!-- ALTER SQL Modal -->
+    <div id="alter-sql-modal"
+        class="fixed inset-0 bg-black/50 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col animate-slideUp">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+                <div class="flex items-center gap-3">
+                    <h3 class="text-lg font-semibold text-slate-800">⚡ ALTER SQL Script</h3>
+                    <span id="alter-sql-type-badge"
+                        class="text-xs font-bold px-3 py-1 rounded-full bg-violet-100 text-violet-700">DETECTING...</span>
+                </div>
+                <button onclick="closeAlterSqlModal()"
+                    class="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-6 space-y-4">
+                <pre id="alter-sql-content"
+                    class="p-4 rounded-xl bg-slate-900 text-emerald-300 text-sm font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap border border-slate-700 max-h-[50vh] overflow-y-auto">Generating ALTER SQL...</pre>
+                <div id="alter-sql-warnings" class="space-y-2"></div>
+            </div>
+            <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
+                <button onclick="closeAlterSqlModal()"
+                    class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">Close</button>
+                <button id="alter-sql-copy-btn" onclick="copyAlterSql()"
+                    class="px-4 py-2 text-sm bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+                    📋 Copy to Clipboard
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div id="toast-container" class="fixed top-4 right-4 z-50 space-y-2"></div>
 

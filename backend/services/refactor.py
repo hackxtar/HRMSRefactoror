@@ -9,7 +9,7 @@ import hashlib
 import re
 from typing import List, Tuple, Optional
 from datetime import datetime
-from .scanner import FileScanner, _normalize_ext_set
+from .scanner import FileScanner, _normalize_ext_set, detect_encoding
 
 
 class RefactorExecutor:
@@ -97,8 +97,9 @@ class RefactorExecutor:
         }
 
         try:
-            # Read original content
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            # Detect encoding and read original content
+            file_encoding = detect_encoding(file_path)
+            with open(file_path, 'r', encoding=file_encoding, errors='ignore') as f:
                 original_content = f.read()
 
             result['original_hash'] = self.calculate_file_hash(file_path)
@@ -150,7 +151,7 @@ class RefactorExecutor:
             result['backup_path'] = backup_path
 
             # Write modified content
-            with open(file_path, 'w', encoding='utf-8', newline='') as f:
+            with open(file_path, 'w', encoding=file_encoding, newline='') as f:
                 f.write(modified_content)
 
             result['replacements_count'] = total_replacements
